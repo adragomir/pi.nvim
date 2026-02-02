@@ -97,7 +97,7 @@ end
 
 function M.setup_keymaps(bufnr, session)
   local function submit_input()
-    local s = session or state.get_session()
+    local s = session or state.get_session(bufnr)
     if not s or s.mode ~= "remote" then
       return
     end

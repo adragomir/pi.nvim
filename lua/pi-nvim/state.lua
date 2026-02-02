@@ -1,52 +1,49 @@
 local M = {}
 
-local tab_states = {}
+local sessions = {}
 
-function M.get_state(tabnr)
-  tabnr = tabnr or vim.api.nvim_get_current_tabpage()
-  if not tab_states[tabnr] then
-    tab_states[tabnr] = {session = nil}
+function M.set_session(session, bufnr)
+  if not session or not bufnr then
+    return
   end
-  return tab_states[tabnr]
+  sessions[bufnr] = session
 end
 
-function M.set_session(session, tabnr)
-  tabnr = tabnr or vim.api.nvim_get_current_tabpage()
-  if not tab_states[tabnr] then
-    tab_states[tabnr] = {session = nil}
+function M.get_session(bufnr)
+  if not bufnr then
+    return nil
   end
-  tab_states[tabnr].session = session
+  return sessions[bufnr]
 end
 
-function M.get_session(tabnr)
-  local state = M.get_state(tabnr)
-  return state.session
+function M.clear_session(bufnr)
+  if not bufnr then
+    return
+  end
+  sessions[bufnr] = nil
 end
 
-function M.clear_state(tabnr)
-  tabnr = tabnr or vim.api.nvim_get_current_tabpage()
-  local state = tab_states[tabnr]
+function M.get_visible_session()
+  local wins = vim.api.nvim_tabpage_list_wins(0)
+  local list = {}
+  local unique = {}
 
-  if state and state.session then
-    state.session:close()
-    state.session = nil
+  for _, win in ipairs(wins) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    local session = sessions[buf]
+    if session and not unique[session] then
+      unique[session] = true
+      table.insert(list, session)
+    end
   end
 
-  tab_states[tabnr] = nil
-end
-
-function M.setup_autocmds()
-  local group = vim.api.nvim_create_augroup("PiNvimState", { clear = true })
-
-  vim.api.nvim_create_autocmd("TabClosed", {
-    group = group,
-    callback = function(ev)
-      local tabnr = tonumber(ev.file)
-      if tabnr and tab_states[tabnr] then
-        M.clear_state(tabnr)
-      end
-    end,
-  })
+  if #list == 1 then
+    return list[1]
+  end
+  if #list == 0 then
+    return nil, "No visible Pi Agent session"
+  end
+  return nil, "Multiple visible Pi Agent sessions"
 end
 
 return M

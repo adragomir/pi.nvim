@@ -88,7 +88,7 @@ end
 
 local function setup_keymaps(bufnr, session)
   local function submit_input()
-    local s = session or state.get_session()
+    local s = session or state.get_session(bufnr)
     if not s or s.mode ~= "remote" then
       return
     end
@@ -106,7 +106,7 @@ local function setup_keymaps(bufnr, session)
   end
 
   local function abort_operation()
-    local s = session or state.get_session()
+    local s = session or state.get_session(bufnr)
     if s and s.mode == "remote" then
       s:abort()
     end
@@ -146,15 +146,14 @@ local function setup_buffer_protection(bufnr, session)
     end,
   })
 
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
     group = group,
     buffer = bufnr,
+    once = true,
     callback = function()
-      vim.api.nvim_del_augroup_by_id(group)
-      if state.get_session() == session then
-        session:close({ skip_buf_delete = true })
-        state.set_session(nil)
-      end
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+      session:close()
+      state.clear_session(bufnr)
     end,
   })
 end

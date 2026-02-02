@@ -1,7 +1,23 @@
 local config = require("pi-nvim.config")
+local state = require("pi-nvim.state")
 
 local EmbedSession = {}
 EmbedSession.__index = EmbedSession
+
+local function setup_buffer_cleanup(bufnr, session)
+  local group = vim.api.nvim_create_augroup("PiNvimEmbedCleanup" .. bufnr, { clear = true })
+
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+    group = group,
+    buffer = bufnr,
+    once = true,
+    callback = function()
+      pcall(vim.api.nvim_del_augroup_by_id, group)
+      session:close()
+      state.clear_session(bufnr)
+    end,
+  })
+end
 
 function EmbedSession.new()
   local self = setmetatable({
@@ -30,6 +46,7 @@ function EmbedSession:open(opts)
 
   local winid = vim.api.nvim_get_current_win()
   local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "hide")
   vim.api.nvim_win_set_buf(winid, bufnr)
 
   local session = self
@@ -50,6 +67,8 @@ function EmbedSession:open(opts)
   self.winid = winid
   self.job_id = job_id
 
+  setup_buffer_cleanup(bufnr, self)
+
   vim.cmd("startinsert")
   return true
 end
@@ -69,14 +88,7 @@ function EmbedSession:close()
     self.job_id = nil
   end
 
-  if self.winid and vim.api.nvim_win_is_valid(self.winid) then
-    vim.api.nvim_win_close(self.winid, true)
-  end
   self.winid = nil
-
-  if self.bufnr and vim.api.nvim_buf_is_valid(self.bufnr) then
-    vim.api.nvim_buf_delete(self.bufnr, { force = true })
-  end
   self.bufnr = nil
 end
 

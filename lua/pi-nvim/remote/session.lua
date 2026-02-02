@@ -221,10 +221,7 @@ function RemoteSession:send(text)
   return self.client:prompt(text)
 end
 
-function RemoteSession:close(opts)
-  opts = opts or {}
-  local skip_buf_delete = opts.skip_buf_delete
-
+function RemoteSession:close()
   self:_stop_connection_check()
   self:_cancel_render_timer()
 
@@ -233,14 +230,7 @@ function RemoteSession:close(opts)
     self.event_unsubscribe = nil
   end
 
-  if self.winid and vim.api.nvim_win_is_valid(self.winid) then
-    vim.api.nvim_win_close(self.winid, true)
-  end
   self.winid = nil
-
-  if not skip_buf_delete and self.bufnr and vim.api.nvim_buf_is_valid(self.bufnr) then
-    vim.api.nvim_buf_delete(self.bufnr, { force = true })
-  end
   self.bufnr = nil
 
   extension_ui.clear()

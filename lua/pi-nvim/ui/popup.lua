@@ -182,9 +182,10 @@ function M.handle_visual_selection()
     end
 
     local prompt = M.build_prompt(selection_info, user_input)
-    local session = state.get_session()
+    local session, err = state.get_visible_session()
     if not session then
-      vim.notify("No Pi Agent session active. Use :PiAgent new or :PiAgent <port>", vim.log.levels.WARN)
+      local level = err == "Multiple visible Pi Agent sessions" and vim.log.levels.ERROR or vim.log.levels.WARN
+      vim.notify(err, level)
       return
     end
 

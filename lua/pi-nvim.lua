@@ -4,13 +4,12 @@ local config = require("pi-nvim.config")
 local state = require("pi-nvim.state")
 
 local function register_commands()
-  state.setup_autocmds()
   vim.api.nvim_create_user_command("PiAgent", function(opts)
     local args = opts.fargs
     local vertical = opts.smods and opts.smods.vertical or false
 
     if #args == 0 then
-      vim.notify("Usage: :PiAgent new | <port> | disconnect | status", vim.log.levels.INFO)
+      vim.notify("Usage: :PiAgent new | <port> | status | abort", vim.log.levels.INFO)
       return
     end
 
@@ -18,25 +17,23 @@ local function register_commands()
 
     if subcmd == "new" then
       local session = require('pi-nvim.embed.session').new()
-      state.set_session(session)
       session.open({vertical = vertical})
+      if session.bufnr then
+        state.set_session(session, session.bufnr)
+      end
       return
     end
 
     if string.match(subcmd, "^%d+$") then
       local port = tonumber(subcmd)
       if port then
-        local session = state.get_session()
-        if session then
-          vim.notify("Session already active. Disconnect first.", vim.log.levels.WARN)
-          return
-        end
-        session = require('pi-nvim.remote.session').new()
-        state.set_session(session)
+        local session = require('pi-nvim.remote.session').new()
         session:connect(port):and_then(function(_val)
           session:open_window({vertical = vertical})
+          if session.bufnr then
+            state.set_session(session, session.bufnr)
+          end
         end):catch(function(err)
-          state.set_session(nil)
           vim.notify("Failed to connect: " .. tostring(err), vim.log.levels.ERROR)
         end)
         return
@@ -44,25 +41,16 @@ local function register_commands()
     end
 
     -- rest commands need session
-    local session = state.get_session()
+    local session, err = state.get_visible_session()
     if not session then
-      vim.notify("No active Pi Agent session", vim.log.levels.WARN)
-      return
-    end
-    if subcmd == "disconnect" then
-      session:close()
-      state.set_session(nil)
+      local level = err == "Multiple visible Pi Agent sessions" and vim.log.levels.ERROR or vim.log.levels.WARN
+      vim.notify(err, level)
       return
     end
 
     if subcmd == "status" then
       local running = session:is_active() and "running" or "stopped"
       vim.notify("Mode: " .. session.mode .. "(" .. running .. ")", vim.log.levels.INFO)
-      return
-    end
-
-    if subcmd == "focus" then
-      session:focus()
       return
     end
 
@@ -74,7 +62,7 @@ local function register_commands()
   end, {
     nargs = "*",
     complete = function(arglead, cmdline, cursorpos)
-      local completions = { "new", "disconnect", "status", "focus", "abort" }
+      local completions = { "new", "status", "abort" }
 
       if arglead == "" then
         return completions
@@ -98,9 +86,10 @@ local function register_keymaps()
 
   if keymap then
     vim.keymap.set("v", keymap, function()
-      local session = state.get_session()
+      local session, err = state.get_visible_session()
       if not session then
-        vim.notify("No active Pi Agent session", vim.log.levels.WARN)
+        local level = err == "Multiple visible Pi Agent sessions" and vim.log.levels.ERROR or vim.log.levels.WARN
+        vim.notify(err, level)
         return
       end
 

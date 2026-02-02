@@ -7,7 +7,6 @@ A Neovim plugin for interacting with the [Pi coding agent](https://github.com/an
 - **Terminal Mode**: Open a terminal running the `pi` command directly
 - **RPC Mode**: Connect to a running Pi agent via TCP RPC, with a chat-style interface
 - **Visual Selection**: Select code and send it to the agent with a custom prompt
-- **Streaming Output**: Real-time rendering of agent responses
 - **Extension UI**: Handle extension requests (select, confirm, input, editor dialogs)
 
 ## Requirements
@@ -50,9 +49,7 @@ use {
 | `:PiAgent new` | Open a terminal running `pi` |
 | `:vertical PiAgent new` | Open terminal in vertical split |
 | `:PiAgent <port>` | Connect to RPC server on given port |
-| `:PiAgent disconnect` | Close terminal or disconnect from RPC |
 | `:PiAgent status` | Show current session status |
-| `:PiAgent focus` | Focus the Pi Agent window |
 | `:PiAgent abort` | Abort current RPC operation |
 | `:PiAgent reconnect` | Reconnect to RPC server |
 
@@ -103,43 +100,6 @@ require("pi-nvim").setup({
   -- Keymaps
   keymaps = {
     visual_prompt = "<leader>pi", -- set to nil to disable
-  },
-
-  -- Custom formatters (functions that return lines table)
-  formatters = {
-    -- Format thinking blocks (collapsible by default)
-    thinking = function(thinking_content)
-      return {
-        "<details>",
-        "<summary>💭 Thinking...</summary>",
-        "",
-        thinking_content.thinking or "",
-        "",
-        "</details>",
-        "",
-      }
-    end,
-
-    -- Format tool calls
-    tool_call = function(tool_call)
-      local args_json = vim.json.encode(tool_call.args or {})
-      return {
-        "**🔧 Tool: " .. (tool_call.name or "unknown") .. "**",
-        "",
-        "```json",
-        args_json,
-        "```",
-        "",
-      }
-    end,
-
-    -- Format tool results
-    tool_result = function(tool_name, content, is_error)
-      local prefix = is_error and "❌ " or "✅ "
-      local lines = { "### " .. prefix .. (tool_name or "Tool Result"), "" }
-      -- Add content formatting here
-      return lines
-    end,
   },
 })
 ```
