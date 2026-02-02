@@ -15,23 +15,13 @@ function RemoteSession.new()
     bufnr = nil,
     winid = nil,
     messages = {},
-    is_streaming = false,
+    is_working = false,
     event_unsubscribe = nil,
     _connection_timer = nil,
-    _streaming_message = nil,
-    _streaming_text = "",
-    _streaming_thinking = "",
-    _tool_executions = {},
     _last_render_time = 0,
     _render_timer = nil,
   }, RemoteSession)
   return self
-end
-
-function RemoteSession:_reset_streaming()
-  self._streaming_message = nil
-  self._streaming_text = ""
-  self._streaming_thinking = ""
 end
 
 function RemoteSession:_stop_connection_check()
@@ -65,12 +55,10 @@ function RemoteSession:_handle_disconnect()
   end
 
   extension_ui.clear()
-  self:_reset_streaming()
-  self._tool_executions = {}
-  self.is_streaming = false
+  self.is_working = false
 
   if self.bufnr and vim.api.nvim_buf_is_valid(self.bufnr) then
-    self:_render({ disconnected = true })
+    self:_render(nil, { disconnected = true })
   end
 end
 
@@ -85,21 +73,11 @@ end
 function RemoteSession:_do_render()
   self:_cancel_render_timer()
   self._last_render_time = vim.uv.now()
-  self:_render({
-    streaming_text = self._streaming_text,
-    streaming_thinking = self._streaming_thinking,
-    streaming_message = self._streaming_message,
-    is_streaming = self.is_streaming,
-  })
+  self:_render(nil)
 end
 
 function RemoteSession:_trigger_render()
   if not self.bufnr then
-    return
-  end
-
-  local cfg = config.get()
-  if not cfg.streaming.enabled then
     return
   end
 
@@ -123,92 +101,46 @@ function RemoteSession:_trigger_render()
   end
 end
 
-function RemoteSession:_render(opts)
-  buffer.render(self.bufnr, self.messages, opts, self)
+---@param message Message?
+function RemoteSession:_render(message, opts)
+  buffer.render(self.bufnr, message, opts, self)
 end
 
----@param event AgentEvent
+---@param event ExtensionEvent
 function RemoteSession:_handle_event(event)
-  log.log("EVENT", event)
+  -- ignored events
+  if event.type == 'tool_call' or event.type == 'tool_result' then
+    return
+  end
+
   if event.type == "extension_ui_request" then
     extension_ui.handle_request(self.client, event)
     return
   end
 
   if event.type == "agent_start" then
-    self:_reset_streaming()
-    self._tool_executions = {}
-    self.is_streaming = true
-    self:_trigger_render()
+    self.is_working = true
+    -- self:_trigger_render()
     return
   end
 
   if event.type == "agent_end" then
-    self.is_streaming = false
+    self.is_working = false
     self.messages = event.messages or self.messages
-    self:_reset_streaming()
-    self._tool_executions = {}
-    self:_trigger_render()
+    -- self:_trigger_render()
     return
   end
 
-  if event.type == "message_start" then
-    if event.message and event.message.role == "assistant" then
-      self._streaming_message = event.message
-      self._streaming_text = ""
-      self._streaming_thinking = ""
+  if event.type == "message_end" then
+    log.log("EVENT: ", event)
+    if event.message.role == "user" then
+      -- render the message
+      self:_render(event.message)
+    elseif event.message.role == "assistant" then
+      self:_render(event.message)
+    elseif event.message.role == 'toolResult' then
+      self:_render(event.message)
     end
-    return
-  end
-
-  if event.type == "message_update" then
-    local assistant_event = event.assistantMessageEvent
-    if not assistant_event then
-      return
-    end
-
-    local event_type = assistant_event.type
-
-    if event_type == "text_delta" then
-      self._streaming_text = self._streaming_text .. (assistant_event.delta or "")
-      self:_trigger_render()
-    elseif event_type == "thinking_delta" then
-      self._streaming_thinking = self._streaming_thinking .. (assistant_event.delta or "")
-      self:_trigger_render()
-    elseif event_type == "text_end" then
-      self._streaming_text = assistant_event.content or self._streaming_text
-    elseif event_type == "thinking_end" then
-      self._streaming_thinking = assistant_event.content or self._streaming_thinking
-    elseif event_type == "done" or event_type == "error" then
-      self._streaming_message = assistant_event.message or event.message
-    end
-    return
-  end
-
-  if event.type == "tool_execution_start" then
-    self._tool_executions[event.toolCallId] = {
-      name = event.toolName,
-      args = event.args,
-      status = "running",
-    }
-    self:_trigger_render()
-    return
-  end
-
-  if event.type == "tool_execution_update" then
-    if self._tool_executions[event.toolCallId] then
-      self._tool_executions[event.toolCallId].partial_result = event.partialResult
-    end
-    return
-  end
-
-  if event.type == "tool_execution_end" then
-    if self._tool_executions[event.toolCallId] then
-      self._tool_executions[event.toolCallId].status = "done"
-      self._tool_executions[event.toolCallId].result = event.result
-      self._tool_executions[event.toolCallId].is_error = event.isError
-    end
-    self:_trigger_render()
     return
   end
 end
@@ -229,10 +161,6 @@ function RemoteSession:connect(port)
     session.event_unsubscribe = client:on_event(function(event)
       session:_handle_event(event)
     end)
-
-    return client:get_messages()
-  end):and_then(function(messages)
-    session.messages = messages or {}
     session:_start_connection_check()
     promise:resolve(session)
   end):catch(function(err)
@@ -273,7 +201,7 @@ function RemoteSession:open_window(opts)
 
   buffer.move_cursor_to_input(self.bufnr, self.winid)
 
-  self:_render({ is_streaming = self.is_streaming })
+  self:_render(nil, { is_working = self.is_working })
 
   return self.winid
 end
@@ -286,22 +214,17 @@ function RemoteSession:send(text)
     return promise
   end
 
-  local user_message = {
-    role = "user",
-    content = text,
-    timestamp = os.time() * 1000,
-  }
-  table.insert(self.messages, user_message)
-  self:_trigger_render()
-
-  if self.is_streaming then
+  if self.is_working then
     return self.client:steer(text)
   end
 
   return self.client:prompt(text)
 end
 
-function RemoteSession:close()
+function RemoteSession:close(opts)
+  opts = opts or {}
+  local skip_buf_delete = opts.skip_buf_delete
+
   self:_stop_connection_check()
   self:_cancel_render_timer()
 
@@ -315,7 +238,7 @@ function RemoteSession:close()
   end
   self.winid = nil
 
-  if self.bufnr and vim.api.nvim_buf_is_valid(self.bufnr) then
+  if not skip_buf_delete and self.bufnr and vim.api.nvim_buf_is_valid(self.bufnr) then
     vim.api.nvim_buf_delete(self.bufnr, { force = true })
   end
   self.bufnr = nil
@@ -328,9 +251,7 @@ function RemoteSession:close()
   end
 
   self.messages = {}
-  self.is_streaming = false
-  self:_reset_streaming()
-  self._tool_executions = {}
+  self.is_working = false
 end
 
 function RemoteSession:is_active()
@@ -359,20 +280,8 @@ function RemoteSession:get_port()
   return nil
 end
 
-function RemoteSession:get_bufnr()
-  return self.bufnr
-end
-
 function RemoteSession:get_winid()
   return self.winid
-end
-
-function RemoteSession:get_messages()
-  return self.messages
-end
-
-function RemoteSession:get_tool_executions()
-  return self._tool_executions
 end
 
 function RemoteSession:abort()

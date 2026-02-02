@@ -102,14 +102,6 @@ function EmbedSession:focus()
   return false
 end
 
-function EmbedSession:get_bufnr()
-  return self.bufnr
-end
-
-function EmbedSession:get_winid()
-  return self.winid
-end
-
 function EmbedSession:abort()
   vim.notify("Abort only works in RPC mode", vim.log.levels.WARN)
 end

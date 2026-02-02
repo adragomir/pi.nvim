@@ -102,18 +102,18 @@ local Promise = require('pi-nvim.util.promise')
 ---@alias Message UserMessage | AssistantMessage | ToolResultMessage
   
 ---@alias AssistantMessageEvent
----	  { type: 'start', partial: AssistantMessage }
----	| { type: 'text_start', contentIndex: number, partial: AssistantMessage }
----	| { type: 'text_delta', contentIndex: number, delta: string, partial: AssistantMessage }
----	| { type: 'text_end', contentIndex: number, content: string, partial: AssistantMessage }
----	| { type: 'thinking_start', contentIndex: number, partial: AssistantMessage }
----	| { type: 'thinking_delta', contentIndex: number, delta: string, partial: AssistantMessage }
----	| { type: 'thinking_end', contentIndex: number, content: string, partial: AssistantMessage }
----	| { type: 'toolcall_start', contentIndex: number, partial: AssistantMessage }
----	| { type: 'toolcall_delta', contentIndex: number, delta: string, partial: AssistantMessage }
----	| { type: 'toolcall_end', contentIndex: number, toolCall: ToolCall, partial: AssistantMessage }
----	| { type: 'done', reason: StopReason, message: AssistantMessage }
----	| { type: 'error', reason: StopReason, error: AssistantMessage },
+---  { type: 'start', partial: AssistantMessage }
+---| { type: 'text_start', contentIndex: number, partial: AssistantMessage }
+---| { type: 'text_delta', contentIndex: number, delta: string, partial: AssistantMessage }
+---| { type: 'text_end', contentIndex: number, content: string, partial: AssistantMessage }
+---| { type: 'thinking_start', contentIndex: number, partial: AssistantMessage }
+---| { type: 'thinking_delta', contentIndex: number, delta: string, partial: AssistantMessage }
+---| { type: 'thinking_end', contentIndex: number, content: string, partial: AssistantMessage }
+---| { type: 'toolcall_start', contentIndex: number, partial: AssistantMessage }
+---| { type: 'toolcall_delta', contentIndex: number, delta: string, partial: AssistantMessage }
+---| { type: 'toolcall_end', contentIndex: number, toolCall: ToolCall, partial: AssistantMessage }
+---| { type: 'done', reason: StopReason, message: AssistantMessage }
+---| { type: 'error', reason: StopReason, error: AssistantMessage },
 
 ---@alias RpcCommand
 ---| { id: string?, type: 'prompt', message: string, images: ImageContent[]?, streamingBehavior: ('steer' | 'followUp')? }
@@ -261,21 +261,474 @@ local Promise = require('pi-nvim.util.promise')
 ---@alias AgentEvent
 --- # Agent lifecycle
 --- | { type: "agent_start" }
---- | { type: "agent_end"; messages: AgentMessage[] }
+--- | { type: "agent_end", messages: AgentMessage[] }
 --- # Turn lifecycle - a turn is one assistant response + any tool calls/results
 --- | { type: "turn_start" }
---- | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+--- | { type: "turn_end", message: AgentMessage, toolResults: ToolResultMessage[] }
 --- # Message lifecycle - emitted for user, assistant, and toolResult messages
---- | { type: "message_start"; message: AgentMessage }
+--- | { type: "message_start", message: AgentMessage }
 --- # Only emitted for assistant messages during streaming
---- | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
---- | { type: "message_end"; message: AgentMessage }
+--- | { type: "message_update", message: AgentMessage, assistantMessageEvent: AssistantMessageEvent }
+--- | { type: "message_end", message: AgentMessage }
 --- # Tool execution lifecycle
---- | { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
---- | { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
---- | { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+--- | { type: "tool_execution_start", toolCallId: string, toolName: string, args: any }
+--- | { type: "tool_execution_update", toolCallId: string, toolName: string, args: any, partialResult: any }
+--- | { type: "tool_execution_end", toolCallId: string, toolName: string, result: any, isError: boolean },
 
----@alias RpcEventListener fun(event: AgentEvent): nil
+---@alias AgentEventWire
+--- # Agent lifecycle
+--- | { type: "agent_start" }
+--- | { type: "agent_end", messages: AgentMessage[] }
+--- # Turn lifecycle - a turn is one assistant response + any tool calls/results
+--- | { type: "turn_start", turnIndex: integer, timestamp: integer }
+--- | { type: "turn_end", turnIndex: integer, message: AgentMessage, toolResults: ToolResultMessage[] }
+--- # Message lifecycle - emitted for user, assistant, and toolResult messages
+--- | { type: "message_start", turnIndex: integer, timestamp: integer, message: AgentMessage }
+--- # Only emitted for assistant messages during streaming
+--- | { type: "message_update", turnIndex: integer, message: AgentMessage, assistantMessageEvent: AssistantMessageEvent }
+--- | { type: "message_end", turnIndex: integer, message: AgentMessage }
+--- # Tool execution lifecycle
+--- | { type: "tool_execution_start", turnIndex: integer, timestamp: integer, toolCallId: string, toolName: string, args: any }
+--- | { type: "tool_execution_update", turnIndex: integer, toolCallId: string, toolName: string, args: any, partialResult: any }
+--- | { type: "tool_execution_end", turnIndex: integer, toolCallId: string, toolName: string, result: any, isError: boolean },
+
+---@class ResourcesDiscoverEvent
+---@field type 'resource_discover'
+---@field cwd string
+---@field reason 'startup' | 'reload'
+
+---@class SessionStartEvent
+---@field type 'session_start'
+---
+---@class SessionBeforeSwitchEvent
+---@field type 'session_before_switch'
+---@field reason 'new' | 'resume'
+---@field targetSessionFile string?
+
+---@class SessionSwitchEvent
+---@field type 'session_switch'
+---@field reason 'new' | 'resume'
+---@field previousSessionFile string?
+
+---@class SessionBeforeForkEvent
+---@field type 'session_before_fork'
+---@field entryId string
+
+---@class SessionForkEvent
+---@field type 'session_fork'
+---@field previousSessionFile string?
+
+---@class FileOperations
+---@field read string[]
+---@field written string[]
+---@field edited string[]
+
+---@class CompactionSettings
+---@field enabled boolean
+---@field reserveTokens integer
+---@field keepRecentTokens integer
+
+---@class CompactionPreparation
+---@field firstKeptEntryId string
+---@field messagesToSummarize Message[]
+---@field turnPrefixMessages Message[]
+---@field isSplitTurn boolean
+---@field tokensBefore integer
+---@field previousSummary string?
+---@field fileOps FileOperations[]
+---@field settings CompactionSettings
+
+---@class SessionMessageEntry
+---@field type 'message'
+---@field message Message
+
+---@class ThinkingLevelChangeEntry
+---@field type 'thinking_level_change'
+---@field thinkingLevel integer
+
+---@class ModelChangeEntry
+---@field type 'model_change'
+---@field provider string
+---@field modelId string
+
+---@class BranchSummaryEntry
+---@field type 'branch_summary'
+---@field summary string
+---@field firstKeptEntryId string
+---@field tokensBefore integer
+---@field details any?
+---@field fromHook boolean?
+
+---@class CustomEntry
+---@field type 'custom'
+---@field customType string
+---@field data any?
+
+---@class CustomMessageEntry
+---@field type 'custom_message'
+---@field customType string
+---@field content string | (TextContent | ImageContent)[]
+---@field details any?
+---@field display boolean
+
+---@class LabelEntry
+---@field type 'label'
+---@field targetId string
+---@field label string?
+
+---@class SessionInfoEntry
+---@field type 'session_info'
+---@field name string?
+
+---@alias SessionEntry
+---SessionMessageEntry
+---| ThinkingLevelChangeEntry
+---| ModelChangeEntry
+---| CompactionEntry
+---| BranchSummaryEntry
+---| CustomEntry
+---| CustomMessageEntry
+---| LabelEntry
+---| SessionInfoEntry
+
+---@class CompactionEntry
+---@field type 'compaction'
+---@field summary string
+---@field firstKeptEntryId string
+---@field tokensBefore integer
+---@field details any?
+---@field fromHook boolean?
+
+---@class SessionBeforeCompactEvent
+---@field type 'session_before_compact'
+---@field previousSessionFile string?
+
+---@class SessionCompactEvent
+---@field type 'session_compact'
+---@field compactionEntry CompactionEntry
+---@field fromExtension boolean
+
+---@class SessionShutdownEvent
+---@field type 'session_shutdown'
+
+---@class TreePreparation
+---@field targetId string
+---@field oldLeafId string?
+---@field commonAncestorId string?
+---@field entriesToSummarize SessionEntry[]
+---@field userWantsSummary boolean
+---@field customInstructions string?
+---@field replaceInstructions boolean?
+---@field label string?
+
+---@class SessionBeforeTreeEvent
+---@field type 'session_before_tree'
+---@field preparation TreePreparation
+---@field signal any
+
+---@class SessionTreeEvent
+---@field newLeafId string | nil
+---@field oldLeafId string | nil
+---@field summaryEntry BranchSummaryEntry?
+---@field fromExtension boolean?
+
+---@alias SessionEvent
+--- SessionStartEvent
+---| SessionBeforeSwitchEvent
+---| SessionSwitchEvent
+---| SessionBeforeForkEvent
+---| SessionForkEvent
+---| SessionBeforeCompactEvent
+---| SessionCompactEvent
+---| SessionShutdownEvent
+---| SessionBeforeTreeEvent
+---| SessionTreeEvent
+
+---@class ContextEvent
+---@field type 'context'
+---@field messages Message[]
+
+
+---@class BeforeAgentStartEvent
+---@field type 'before_agent_start'
+---@field prompt string
+---@field images ImageContent[]?
+---@field systemPrompt string
+
+---@class AgentStartEvent
+---@field type 'agent_start'
+
+
+
+---@class AgentEndEvent
+---@field type 'agent_end'
+---@field messages Message[]
+
+---@class TurnStartEvent
+---@field type "turn_start"
+---@field turnIndex integer
+---@field timestamp integer
+
+---@class TurnEndEvent
+---@field type "turn_end"
+---@field turnIndex integer
+---@field message Message
+---@field toolResults ToolResultMessage[]
+
+---@class MessageStartEvent
+---@field type "message_start"
+---@field turnIndex integer
+---@field timestamp integer
+---@field message Message
+
+---@class MessageUpdateEvent
+---@field type "message_update"
+---@field turnIndex integer
+---@field message Message
+---@field assistantMessageEvent AssistantMessageEvent
+
+---@class MessageEndEvent
+---@field type "message_end"
+---@field turnIndex integer
+---@field message Message
+
+---@class ToolExecutionStartEvent
+---@field type "tool_execution_start"
+---@field turnIndex integer
+---@field timestamp integer
+---@field toolCallId string
+---@field toolName string
+---@field args any
+
+---@class ToolExecutionUpdateEvent
+---@field type "tool_execution_update"
+---@field turnIndex integer
+---@field toolCallId string
+---@field toolName string
+---@field args any
+---@field partialResult any
+
+---@class ToolExecutionEndEvent
+---@field type "tool_execution_end"
+---@field turnIndex integer
+---@field toolCallId string
+---@field toolName string
+---@field result any
+---@field isError boolean
+
+---@alias ModelSelectSource "set" | "cycle" | "restore"
+
+---@class ModelSelectEvent
+---@field type "model_select"
+---@field model Model
+---@field previousModel Model
+---@field source ModelSelectSource
+
+---@class UserBashEvent
+---@field type "user_bash"
+---@field command string
+---@field excludeFromContext boolean
+---@field cwd string
+
+---@alias InputSource "interactive" | "rpc" | "extension"
+
+---@class InputEvent
+---@field type "input"
+---@field text string
+---@field images ImageContent[]
+---@field source InputSource
+
+---@class ToolCallEventBase
+---@field type 'tool_call'
+---@field toolCallId string
+
+---@class BashToolInput
+---@field command string
+---@field timeout number?
+
+---@class BashToolCallEvent: ToolCallEventBase
+---@field toolName 'bash'
+---@field input BashToolInput
+
+---@class ReadToolInput
+---@field path string
+---@field offset number?
+---@field limit number?
+
+---@class ReadToolCallEvent: ToolCallEventBase
+---@field toolName 'read'
+---@field input ReadToolInput
+
+---@class EditToolInput
+---@field path string
+---@field oldText string
+---@field newText string
+
+---@class EditToolCallEvent: ToolCallEventBase
+---@field toolName 'edit'
+---@field input EditToolInput
+
+---@class WriteToolInput
+---@field path string
+---@field content string
+
+---@class WriteToolCallEvent: ToolCallEventBase
+---@field toolName 'write'
+---@field input WriteToolInput
+
+---@class GrepToolInput
+---@field pattern string
+---@field path string?
+---@field glob string?
+---@field ignoreCase boolean?
+---@field literal boolean?
+---@field context number?
+---@field limit number?
+
+---@class GrepToolCallEvent: ToolCallEventBase
+---@field toolName 'grep'
+---@field input GrepToolInput
+
+---@class FindToolInput
+---@field pattern string
+---@field path string?
+---@field limit number?
+
+---@class FindToolCallEvent: ToolCallEventBase
+---@field toolName 'find'
+---@field input FindToolInput
+
+---@class LsToolInput
+---@field path string?
+---@field limit number?
+
+---@class LsToolCallEvent: ToolCallEventBase
+---@field toolName 'ls'
+---@field input LsToolInput
+
+---@class CustomToolCallEvent: ToolCallEventBase
+---@field toolName string
+---@field input table<string, string>
+
+---@alias ToolCallEvent
+--- BashToolCallEvent
+--- | ReadToolCallEvent
+--- | EditToolCallEvent
+--- | WriteToolCallEvent
+--- | GrepToolCallEvent
+--- | FindToolCallEvent
+--- | LsToolCallEvent
+--- | CustomToolCallEvent
+
+---@class ToolResultEventBase
+---@field type "tool_result"
+---@field toolCallId string
+---@field input table<string, any>
+---@field content (TextContent | ImageContent)[]
+---@field isError boolean
+
+---@class TruncationResult
+---@field content string
+---@field truncated boolean
+---@field truncatedBy "lines" | "bytes" | nil
+---@field totalLines number
+---@field totalBytes number
+---@field outputLines number
+---@field outputBytes number
+---@field lastLinePartial boolean
+---@field firstLineExceedsLimit boolean
+---@field maxLines number
+---@field maxBytes number
+
+---@class BashToolDetails
+---@field truncation TruncationResult?
+---@field fullOutputPath string?
+
+---@class BashToolResultEvent: ToolResultEventBase
+---@field toolName "bash"
+---@field details BashToolDetails?
+
+---@class ReadToolDetails
+---@field truncation TruncationResult?
+
+---@class ReadToolResultEvent: ToolResultEventBase
+---@field toolName "read"
+---@field details ReadToolDetails?
+
+---@class EditToolDetails
+---@field diff string
+---@field firstChangedLine number?
+
+---@class EditToolResultEvent: ToolResultEventBase
+---@field toolName "edit"
+---@field details EditToolDetails?
+
+---@class WriteToolResultEvent: ToolResultEventBase
+---@field toolName "write"
+---@field details nil
+
+---@class GrepToolDetails
+---@field truncation TruncationResult?
+---@field matchLimitReached number?
+---@field linesTruncated boolean?
+
+---@class GrepToolResultEvent: ToolResultEventBase
+---@field toolName "grep"
+---@field details GrepToolDetails?
+
+---@class FindToolDetails
+---@field truncation TruncationResult?
+---@field resultLimitReached number?
+
+---@class FindToolResultEvent: ToolResultEventBase
+---@field toolName "find"
+---@field details FindToolDetails?
+
+---@class LsToolDetails
+---@field truncation TruncationResult?
+---@field entryLimitReached number?
+
+---@class LsToolResultEvent: ToolResultEventBase
+---@field toolName "ls"
+---@field details LsToolDetails?
+
+---@class CustomToolResultEvent: ToolResultEventBase
+---@field toolName string
+---@field details any
+
+---@alias ToolResultEvent
+--- BashToolResultEvent
+---| ReadToolResultEvent
+---| EditToolResultEvent
+---| WriteToolResultEvent
+---| GrepToolResultEvent
+---| FindToolResultEvent
+---| LsToolResultEvent
+---| CustomToolResultEvent
+
+
+---@alias ExtensionEvent
+--- ResourcesDiscoverEvent
+---| SessionEvent
+---| ContextEvent
+---| BeforeAgentStartEvent
+---| AgentStartEvent
+---| AgentEndEvent
+---| TurnStartEvent
+---| TurnEndEvent
+---| MessageStartEvent
+---| MessageUpdateEvent
+---| MessageEndEvent
+---| ToolExecutionStartEvent
+---| ToolExecutionUpdateEvent
+---| ToolExecutionEndEvent
+---| ModelSelectEvent
+---| UserBashEvent
+---| InputEvent
+---| ToolCallEvent
+---| ToolResultEvent
+
+---@alias RpcEventListener fun(event: ExtensionEvent): nil
 
 ---@class RpcClientOptions
 ---@field host string|nil Host to connect to (default: '127.0.0.1')
@@ -802,6 +1255,7 @@ function RpcClient:_handle_line(line)
     return
   end
 
+  -- response type
   if data.type == 'response' and data.id and self._pending_requests[data.id] then
     local pending = self._pending_requests[data.id]
     self._pending_requests[data.id] = nil
@@ -817,6 +1271,7 @@ function RpcClient:_handle_line(line)
     return
   end
 
+  -- event type
   vim.schedule(function()
     for _, listener in ipairs(self._event_listeners) do
       local listener_ok, err = pcall(listener, data)

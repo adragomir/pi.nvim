@@ -114,12 +114,12 @@ function M.setup_keymaps(bufnr, session)
     end)
   end
 
-  local function abort_operation()
-    local s = session or state.get_session()
-    if s and s.mode == "remote" then
-      s:abort()
-    end
-  end
+  -- local function abort_operation()
+  --   local s = session or state.get_session()
+  --   if s and s.mode == "remote" then
+  --     s:abort()
+  --   end
+  -- end
 
   vim.keymap.set("n", "<CR>", function()
     local winid = vim.api.nvim_get_current_win()
@@ -132,9 +132,9 @@ function M.setup_keymaps(bufnr, session)
     submit_input()
   end, { buffer = bufnr, desc = "Submit prompt" })
 
-  vim.keymap.set({ "n", "i" }, "<C-c>", function()
-    abort_operation()
-  end, { buffer = bufnr, desc = "Abort operation" })
+  -- vim.keymap.set({ "n", "i" }, "<C-c>", function()
+  --   abort_operation()
+  -- end, { buffer = bufnr, desc = "Abort operation" })
 end
 
 return M

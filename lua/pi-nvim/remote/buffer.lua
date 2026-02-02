@@ -1,12 +1,20 @@
 local config = require("pi-nvim.config")
-local render = require("pi-nvim.remote.render")
 local state = require("pi-nvim.state")
+local log = require("pi-nvim.util.log")
 
 local INPUT_SEPARATOR = "─────────────────── <CR> send │ <C-CR> insert │ <C-c> abort ───────────────────"
 local INPUT_SEPARATOR_PREFIX = "───────────────────"
 local INPUT_PROMPT = "> "
 
 local M = {}
+
+local function split(s)
+  local t={}
+  for line in s:gmatch("([^\r\n]+)") do
+    t[#t+1]=line
+  end
+  return t
+end
 
 local function find_separator_line(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
@@ -19,17 +27,6 @@ local function find_separator_line(bufnr)
 end
 
 local function setup_input_area(bufnr)
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-
-  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
-
-  vim.api.nvim_buf_set_lines(bufnr, line_count, line_count, false, {
-    "",
-    INPUT_SEPARATOR,
-    INPUT_PROMPT,
-  })
-
-  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
 end
 
 local function get_input_region(bufnr)
@@ -155,7 +152,7 @@ local function setup_buffer_protection(bufnr, session)
     callback = function()
       vim.api.nvim_del_augroup_by_id(group)
       if state.get_session() == session then
-        session:close()
+        session:close({ skip_buf_delete = true })
         state.set_session(nil)
       end
     end,
@@ -181,7 +178,15 @@ function M.create(session)
     "",
   })
 
-  setup_input_area(bufnr)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+  vim.api.nvim_buf_set_lines(bufnr, line_count, line_count, false, {
+    "",
+    INPUT_SEPARATOR,
+    INPUT_PROMPT,
+  })
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+
   setup_keymaps(bufnr, session)
   setup_buffer_protection(bufnr, session)
 
@@ -206,75 +211,108 @@ function M.move_cursor_to_input(bufnr, winid)
   end
 end
 
-function M.render(bufnr, messages, streaming_opts, session)
+---@param content string | (TextContent | ImageContent)[]
+function render_message_content(content)
+  log.log("render_message_content", content)
+  if type(content) == "string" then
+    return split(content)
+  end
+
+  local lines = {}
+  for _, block in ipairs(content) do
+    if block.type == "text" then
+      if #lines > 0 then
+        table.insert(lines, "Response:")
+      end
+      local pieces = split(block.text)
+      for _, line in ipairs(pieces) do
+        table.insert(lines, line)
+      end
+    elseif block.type == "image" then
+      table.insert(lines, "[Image]")
+    elseif block.type == "thinking" then
+      table.insert(lines, "Thinking...")
+      local pieces = split(block.thinking)
+      for _, line in ipairs(pieces) do
+        table.insert(lines, line)
+      end
+    elseif block.type == "toolCall" or block.name then
+      table.insert(lines, "[Tool Call: " .. (block.name or "unknown") .. "]")
+      for k, v in ipairs(block.arguments) do
+        table.insert(lines, string.format("  %s = %s", tostring(k), tostring(v)))
+      end
+    else
+      table.insert(lines, "[Unknown content type]")
+    end
+  end
+  return lines
+end
+
+---@param bufnr integer
+---@param message Message?
+function M.render(bufnr, message, opts, session)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
 
-  streaming_opts = streaming_opts or {}
+  opts = opts or {}
 
   local winid = session and session:get_winid()
+  local win_valid = vim.api.nvim_win_is_valid(winid)
 
   local old_cursor = nil
   local was_at_bottom = false
   local was_in_input = false
 
-  if winid and vim.api.nvim_win_is_valid(winid) then
+  if winid and win_valid then
     old_cursor = vim.api.nvim_win_get_cursor(winid)
     local old_separator = find_separator_line(bufnr)
-
-    if old_separator then
-      was_in_input = old_cursor[1] >= old_separator
-      was_at_bottom = old_cursor[1] >= old_separator - 3
-    else
-      local old_line_count = vim.api.nvim_buf_line_count(bufnr)
-      was_at_bottom = old_cursor[1] >= old_line_count - 3
-    end
+    was_in_input = old_cursor[1] >= old_separator
+    was_at_bottom = old_cursor[1] >= old_separator - 3
   end
 
   local separator_line = find_separator_line(bufnr)
-  local input_lines = {}
+  local input_area_lines = {}
   if separator_line then
-    input_lines = vim.api.nvim_buf_get_lines(bufnr, separator_line - 1, -1, false)
-  end
-
-  local content_lines = render.render_messages(messages, streaming_opts)
-
-  if #content_lines == 0 then
-    content_lines = {
-      "# Pi Agent",
-      "",
-      "_No messages yet. Type below to start._",
-      "",
-    }
-  else
-    table.insert(content_lines, 1, "# Pi Agent")
-    table.insert(content_lines, 2, "")
-  end
-
-  if streaming_opts.disconnected then
-    table.insert(content_lines, "")
-    table.insert(content_lines, "_⚠️ Disconnected from Pi Agent_")
-    table.insert(content_lines, "")
-  elseif streaming_opts.is_streaming then
-    table.insert(content_lines, "")
-    table.insert(content_lines, "_⏳ Agent is working..._")
-    table.insert(content_lines, "")
+    input_area_lines = vim.api.nvim_buf_get_lines(bufnr, separator_line - 1, -1, false)
   end
 
   vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
-
-  local all_lines = {}
-  for _, line in ipairs(content_lines) do
-    table.insert(all_lines, line)
-  end
-  for _, line in ipairs(input_lines) do
-    table.insert(all_lines, line)
+  if opts.disconnected then
+    vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {"_⚠️ Disconnected from Pi Agent_"})
+  elseif opts.is_working then
+    vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, {"_⚠️ Disconnected from Pi Agent_"})
   end
 
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, all_lines)
+  if message then
+    local content_lines = {}
+    if message.role == "user" then
+      table.insert(content_lines, "## User: ")
+      tmp = render_message_content(message.content)
+      for _, line in ipairs(tmp) do
+        table.insert(content_lines, line)
+      end
+      table.insert(content_lines, "")
+    elseif message.role == "assistant" then
+      table.insert(content_lines, "## Assistant: ")
+      tmp = render_message_content(message.content)
+      for _, line in ipairs(tmp) do
+        table.insert(content_lines, line)
+      end
+      table.insert(content_lines, "")
+    elseif message.role == "toolResult" then
+      table.insert(content_lines, "## Tool Result: ")
+      table.insert(content_lines, "")
+      tmp = render_message_content(message.content)
+      for _, line in ipairs(tmp) do
+        table.insert(content_lines, line)
+      end
+      table.insert(content_lines, "")
+    end
+    vim.api.nvim_buf_set_lines(bufnr, separator_line - 1, separator_line - 1, false, content_lines)
+  end
 
-  if winid and vim.api.nvim_win_is_valid(winid) then
+  if winid and win_valid then
     local new_separator = find_separator_line(bufnr)
 
     if old_cursor and was_in_input and new_separator then
@@ -291,24 +329,12 @@ function M.render(bufnr, messages, streaming_opts, session)
       pcall(vim.api.nvim_win_set_cursor, winid, { new_row, old_cursor[2] })
     end
   end
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
 
-  if streaming_opts.is_streaming then
+
+  if opts.is_working then
     vim.cmd('redraw')
   end
-end
-
-function M.focus(session)
-  if not session then
-    return false
-  end
-
-  local winid = session:get_winid()
-  if not winid or not vim.api.nvim_win_is_valid(winid) then
-    return false
-  end
-
-  vim.api.nvim_set_current_win(winid)
-  return true
 end
 
 return M
